@@ -1,0 +1,56 @@
+{
+    // Use IntelliSense to learn about possible attributes.
+    // Hover to view descriptions of existing attributes.
+    // For more information, visit: https://go.microsoft.com/fwlink/?linkid=830387
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Python: Current File",
+            "type": "python",
+            "request": "launch",
+            "program": "${file}",
+            "console": "integratedTerminal",
+            "justMyCode": true
+        },
+        {
+            "name": "quantization",
+            "type": "python",
+            "request": "launch",
+            "program": "embeddings/quantization.py",
+            "console": "integratedTerminal",
+            "justMyCode": false,
+            "args":[
+                "--folder=data/test",
+              ]
+        },
+        {
+            "name": "g2p",
+            "type": "python",
+            "request": "launch",
+            "program": "embeddings/g2p.py",
+            "console": "integratedTerminal",
+            "justMyCode": false,
+            "args":[
+                "--folder=data/test",
+              ]
+        },
+        {
+            "name": "train",
+            "type": "python",
+            "request": "launch",
+            "program": "train.py",
+            "console": "integratedTerminal",
+            "justMyCode": false,
+            "args":[
+                "--data_dir=data/test",
+                "--metadata_csv=data/test/metadata.csv",
+                "--output_dir=data/test",
+                "--learning_rate=0.05",
+                "--decoder_dim=512",
+                "--num_heads=8",
+                "--num_decoder_layers=6",
+                "--num_epochs=10",
+              ]
+        },
+    ]
+}
