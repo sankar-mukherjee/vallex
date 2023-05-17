@@ -6,6 +6,7 @@ from vallex.transformer import AdaptiveLayerNorm
 from vallex.utils import make_pad_mask
 import torch.nn.functional as F
 import random
+from vallex.utils import topk_sampling
 
 NUM_TEXT_TOKENS = 512
 NUM_AUDIO_TOKENS = 1024  # EnCodec RVQ bins
@@ -151,3 +152,109 @@ class VALLE(nn.Module):
         nar_logits = self.predict_layers[train_stage](y_dec).permute(0, 2, 1)
 
         return codes, ar_logits, ar_targets, nar_logits, nar_targets
+
+    def inference(
+        self,
+        x: torch.Tensor,
+        x_lens: torch.Tensor,
+        y: torch.Tensor,
+        enroll_x_lens: Union[torch.Tensor, None] = None,
+        top_k: int = -100,
+        temperature: float = 1.0,
+    ) -> torch.Tensor:
+        """
+        Args:
+          x:
+            A 2-D tensor of shape (1, S).
+          x_lens:
+            A 1-D tensor of shape (1,). It contains the number of tokens in `x`
+            before padding.
+          y:
+            A 3-D tensor of shape (1, T, 8).
+          top_k: (`optional`) int
+            The number of highest probability tokens to keep for top-k-filtering. Default to -100.
+          temperature: (`optional`) float
+            The value used to module the next token probabilities. Must be strictly positive. Default to 1.0.
+        Returns:
+          Return the predicted audio code matrix and cross-entropy loss.
+        """
+        assert x.ndim == 2, x.shape
+        assert x_lens.ndim == 1, x_lens.shape
+        assert y.ndim == 3, y.shape
+        assert y.shape[0] == 1, y.shape
+
+        assert torch.all(x_lens > 0)
+
+        x = self.text_embedding(x)
+        x = self.text_prenet(x)
+        x = self.text_position(x)
+        # NOTE: x has been padded in TextTokenCollater
+        x_mask = make_pad_mask(x_lens).to(x.device)
+
+        prompts = y
+        prompts_len = y.shape[1]
+
+        # AR Decoder
+        # TODO: Managing decoder steps avoid repetitive computation
+        y = prompts[..., 0]
+        while True:
+            y_emb = self.ar_embedding(y)
+            y_emb = self.audio_prenet(y_emb)
+            y_pos = self.audio_positions[0](y_emb)
+
+            tgt_mask = torch.triu(
+                torch.ones(y.shape[1], y.shape[1], device=y.device, dtype=torch.bool),
+                diagonal=1,
+            )
+
+            y_dec, _ = self.ar_decoder(
+                tgt=y_pos,
+                memory=x,
+                tgt_mask=tgt_mask,
+                memory_mask=None,
+                memory_key_padding_mask=x_mask,
+            )
+            logits = self.predict_layers[0](y_dec[:, -1])
+            if top_k > 0:
+                samples = topk_sampling(logits, top_k=top_k, top_p=1.0, temperature=temperature)
+            else:
+                samples = torch.multinomial(F.softmax(logits, dim=-1),num_samples=1)
+
+            if (
+                samples[0, 0] == NUM_AUDIO_TOKENS
+                or (y.shape[1] - prompts_len) > x_lens.max() * 16
+            ):
+                print(f"VALL-E EOS [{prompts_len} -> {y.shape[1]}]")
+                break
+
+            y = torch.concat([y, samples], dim=1)
+
+        codes = [y[:, prompts_len:]]
+        # Non-AR Decoders
+
+        y_emb = self.nar_embeddings[0](y)
+        for i, (predict_layer, embedding_layer) in enumerate(
+            zip(
+                self.predict_layers[1:],
+                self.nar_embeddings[1:],
+            )
+        ):
+            y_pos = self.audio_positions[i + 1](y_emb)
+            y_dec, _ = self.nar_decoder(
+                tgt=y_pos,
+                memory=x,
+                tgt_mask=None,
+                memory_mask=None,
+                memory_key_padding_mask=x_mask,
+            )
+            logits = predict_layer(y_dec[:, prompts_len:])
+
+            samples = torch.argmax(logits, dim=-1)
+            codes.append(samples)
+            # Formula (4) (5)
+            if i < 6:
+                y_emb[:, :prompts_len] += embedding_layer(prompts[..., i + 1])
+                y_emb[:, prompts_len:] += embedding_layer(samples)
+
+        assert len(codes) == 8
+        return torch.stack(codes, dim=-1)

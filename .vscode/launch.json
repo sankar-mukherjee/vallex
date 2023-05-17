@@ -20,7 +20,7 @@
             "console": "integratedTerminal",
             "justMyCode": false,
             "args":[
-                "--folder=data/test",
+                "--folder=data/LibriTTS",
               ]
         },
         {
@@ -31,7 +31,17 @@
             "console": "integratedTerminal",
             "justMyCode": false,
             "args":[
-                "--folder=data/test",
+                "--folder=data/LibriTTS",
+              ]
+        },        {
+            "name": "prepare_filelist",
+            "type": "python",
+            "request": "launch",
+            "program": "embeddings/prepare_filelist.py",
+            "console": "integratedTerminal",
+            "justMyCode": false,
+            "args":[
+                "--folder=data/LibriTTS",
               ]
         },
         {
@@ -42,14 +52,23 @@
             "console": "integratedTerminal",
             "justMyCode": false,
             "args":[
-                "--data_dir=data/test",
-                "--metadata_csv=data/test/metadata.csv",
-                "--output_dir=data/test",
+                // "--data_dir=data/test",
+                // "--metadata_csv=data/test/metadata.csv",
+                // "--output_dir=output/test",
+
+                "--data_dir=data/LibriTTS",
+                "--metadata_csv=data/LibriTTS/metadata.csv",
+                "--output_dir=output/LibriTTS",
+
                 "--learning_rate=0.05",
-                "--decoder_dim=512",
-                "--num_heads=8",
+                "--decoder_dim=256",
+                "--num_heads=4",
                 "--num_decoder_layers=6",
                 "--num_epochs=10",
+                "--batch_size=2",
+                
+                "--filter_min_duration=1",
+                "--filter_max_duration=5", 
               ]
         },
     ]

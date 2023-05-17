@@ -7,7 +7,7 @@ NUM_TEXT_TOKENS = 128
 NUM_AUDIO_TOKENS = 1024  # EnCodec RVQ bins
 
 class compute_loss(nn.Module):
-    def __init__(self):
+    def __init__(self, device):
         super(compute_loss, self).__init__()
 
         self.reduction="sum"
@@ -17,14 +17,14 @@ class compute_loss(nn.Module):
             average="micro",
             multidim_average="global",
             ignore_index=NUM_AUDIO_TOKENS,
-        )
+        ).to(device)
         self.nar_accuracy_metric = MulticlassAccuracy(
             NUM_AUDIO_TOKENS + 1,
             top_k=10,
             average="micro",
             multidim_average="global",
             ignore_index=NUM_AUDIO_TOKENS,
-        )
+        ).to(device)
 
     def forward(self, y_lens, ar_logits, ar_targets, nar_logits, nar_targets):
 

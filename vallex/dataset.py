@@ -5,6 +5,7 @@ from tqdm import tqdm
 from pathlib import Path
 from functools import cached_property
 from torch.nn.utils.rnn import pad_sequence
+from vallex.utils import to_gpu
 
 
 def load_filepaths_and_text(metadata_csv, split="|"):
@@ -18,16 +19,27 @@ def load_filepaths_and_text(metadata_csv, split="|"):
         fpaths_and_text += [split_line(line) for line in f]
     return fpaths_and_text
 
+
 def _get_phones(path):
     with open(path, "r", encoding="utf8") as f:
         content = f.read()
     return ["<s>"] + content.split() + ["</s>"]
 
 # Define your dataset and dataloader
-class MyDataset(Dataset):
-    def __init__(self, data_dir, metadata_csv):
+class TTSDataset(Dataset):
+    def __init__(
+            self, 
+            data_dir, 
+            metadata_csv,
+            min_duration,
+            max_duration,
+        ):
         self.data_dir = data_dir
         self.audio_and_text_paths = load_filepaths_and_text(metadata_csv)
+        self.audio_and_text_paths = list(filter(lambda x: 
+                                                (min_duration < float(x[-1]) and float(x[-1]) > max_duration), 
+                                                self.audio_and_text_paths))
+
         self.phone_symmap = self._get_phone_symmap()
 
     def _get_phone_symmap(self):
@@ -39,7 +51,7 @@ class MyDataset(Dataset):
         return sorted(set().union(*[_get_phones(path[1]) for path in self.audio_and_text_paths]))
     
     def __getitem__(self, index):
-        audiopath, textpath, speaker = self.audio_and_text_paths[index]
+        audiopath, textpath, speaker, *_ = self.audio_and_text_paths[index]
         audio_embs = torch.load(audiopath)[0].t()
         text_emb = torch.tensor([*map(self.phone_symmap.get, _get_phones(textpath))])
 
@@ -51,7 +63,7 @@ class MyDataset(Dataset):
 
 def collate_fn(batch):
     # Separate the inputs and lengths
-    audios, texts, speaker = zip(*batch)
+    audios, texts, speakers = zip(*batch)
     
     # Pad the text inputs to the maximum length in the batch
     padded_texts = pad_sequence(texts, batch_first=True)
@@ -65,4 +77,10 @@ def collate_fn(batch):
     # Calculate the lengths of each sample
     audio_lens = torch.tensor([audio.shape[0] for audio in audios])
 
-    return padded_audios, audio_lens, padded_texts, text_lens, speaker
+    padded_audios = to_gpu(padded_audios)
+    audio_lens = to_gpu(audio_lens)
+    padded_texts = to_gpu(padded_texts)
+    text_lens = to_gpu(text_lens)
+    speakers = to_gpu(torch.stack(speakers))
+
+    return padded_audios, audio_lens, padded_texts, text_lens, speakers
