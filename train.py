@@ -1,17 +1,20 @@
+import argparse
+from pathlib import Path
+
 import torch
 import torch.nn as nn
 import torch.optim as optim
+from torch.cuda.amp import GradScaler
 from torch.utils.data import DataLoader
 from torch.utils.tensorboard import SummaryWriter
+from tqdm import tqdm
 
-from vallex.dataset import TTSDataset
+from vallex.dataset import TTSDataset, collate_fn
+from vallex.loss import compute_loss
 # from vallex.model import VALLE
 from vallex.model2 import VALLE
-import argparse
-from pathlib import Path
-from vallex.loss import compute_loss
-from vallex.dataset import collate_fn
-from torch.cuda.amp import GradScaler
+from vallex.optim import Eden, Eve, ScaledAdam
+
 
 def parse_argument():
     parser = argparse.ArgumentParser()
@@ -24,8 +27,11 @@ def parse_argument():
     parser.add_argument("--num_heads", type=int)
     parser.add_argument("--num_decoder_layers", type=int)
     parser.add_argument("--num_epochs", type=int)
+    parser.add_argument("--warmup_steps", type=int, default=200)   
     parser.add_argument("--batch_size", type=int)
-    parser.add_argument("--dtype", type=str, default='torch.float16')
+    parser.add_argument("--dtype", type=str, default='float16')
+    parser.add_argument("--accumulate-grad-steps", type=int, default=1, help="""update gradient when batch_idx_train % accumulate_grad_steps == 0.""")
+    parser.add_argument("--batch_idx_train", type=int, default=0)
 
     parser.add_argument("--filter_min_duration", type=float, default=0.0)
     parser.add_argument("--filter_max_duration", type=float, default=100.0)
@@ -57,9 +63,21 @@ if __name__ == "__main__":
     model = VALLE(args.decoder_dim, args.num_heads, args.num_decoder_layers).to(device)
     criterion = compute_loss(device)
 
-    optimizer = optim.Adam(model.parameters(), lr=args.learning_rate)
-    optimizer.zero_grad()
+    # optimizer = optim.Adam(model.parameters(), lr=args.learning_rate)
 
+    parameters_names = []
+    parameters_names.append([
+        name_param_pair[0] for name_param_pair in model.named_parameters()
+    ])
+    optimizer = ScaledAdam(model.parameters(), lr=args.learning_rate,
+            betas=(0.9, 0.95),
+            clipping_scale=2.0,
+            parameters_names=parameters_names,
+            show_dominant_parameters=False,
+            clipping_update_period=1000,
+        )
+    optimizer.zero_grad()
+    scheduler = Eden(optimizer, 5000, 4, warmup_batches=args.warmup_steps)
     scaler = GradScaler(enabled=(args.dtype in ["fp16", "float16"]), init_scale=1.0)
 
     writer = SummaryWriter()
@@ -69,25 +87,43 @@ if __name__ == "__main__":
     elif args.dtype in ["float16", "fp16"]: dtype, enabled = torch.float16, True
 
     is_training = True
+    num_epochs = args.num_epochs
 
-    for epoch in range(args.num_epochs):
+    for epoch in range(num_epochs):
+        if isinstance(scheduler, Eden):
+            scheduler.step_epoch(epoch - 1)
+
         running_loss = 0.0
-        for i, data in enumerate(dataloader, 0):
+        progress_bar = tqdm(dataloader)
+        for i, data in enumerate(progress_bar):
             audio_embs, audio_lens, text_embs, text_lens, speaker = data
             
+            args.batch_idx_train += 1
             with torch.cuda.amp.autocast(dtype=dtype, enabled=enabled):
                 with torch.set_grad_enabled(is_training):
                     codes, ar_logits, ar_targets, nar_logits, nar_targets = model(text_embs, text_lens, audio_embs, audio_lens)
                     loss, loss_info = criterion(audio_lens, ar_logits, ar_targets, nar_logits, nar_targets)
                 assert loss.requires_grad == is_training
 
-            scaler.scale(loss).backward()
-            scaler.step(optimizer)
-            scaler.update()
-            optimizer.zero_grad()
+            if args.batch_idx_train >= args.accumulate_grad_steps:
+                if args.batch_idx_train % args.accumulate_grad_steps == 0:
+                    scaler.scale(loss).backward()
+                    scaler.step(optimizer)
+                    scaler.update()
+                    optimizer.zero_grad()
+
+                    for k in range(args.accumulate_grad_steps):
+                        if isinstance(scheduler, Eden):
+                            scheduler.step_batch(args.batch_idx_train)
+                        else:
+                            scheduler.step()
 
             running_loss += loss
-            print('Batch %d loss: %.3f' % (i + 1, running_loss))
+            
+            # add stuff to progress bar in the end
+            progress_bar.set_description(f"Epoch [{epoch}/{num_epochs}]")
+            progress_bar.set_postfix(loss=f"{loss:.3f}")
+            # print('Batch %d loss: %.3f' % (i + 1, running_loss))
 
         epoch_loss = running_loss / len(dataloader)
         writer.add_scalar('Loss/train', epoch_loss, epoch)

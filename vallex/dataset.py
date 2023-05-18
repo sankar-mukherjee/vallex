@@ -1,10 +1,12 @@
-import torch
-from torch.utils.data import  Dataset
 import random
-from tqdm import tqdm
-from pathlib import Path
 from functools import cached_property
+from pathlib import Path
+
+import torch
 from torch.nn.utils.rnn import pad_sequence
+from torch.utils.data import Dataset
+from tqdm import tqdm
+
 from vallex.utils import to_gpu
 
 

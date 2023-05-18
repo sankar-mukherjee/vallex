@@ -1,7 +1,7 @@
-import torch.nn.functional as F
-import torch.nn as nn
-from torchmetrics.classification import MulticlassAccuracy
 import torch
+import torch.nn as nn
+import torch.nn.functional as F
+from torchmetrics.classification import MulticlassAccuracy
 
 NUM_TEXT_TOKENS = 128
 NUM_AUDIO_TOKENS = 1024  # EnCodec RVQ bins

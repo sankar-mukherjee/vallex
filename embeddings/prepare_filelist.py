@@ -1,8 +1,9 @@
-import glob
-from tqdm import tqdm
 import argparse
+import glob
 from pathlib import Path
+
 import sox
+from tqdm import tqdm
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()

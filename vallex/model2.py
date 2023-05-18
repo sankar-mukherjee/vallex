@@ -1,17 +1,16 @@
+import random
+from typing import Iterator, Tuple, Union
+
 import torch
 import torch.nn as nn
-from vallex.embedding import SinePositionalEmbedding, TokenEmbedding, PositionalEncoding
-from typing import Iterator, Tuple, Union
-from vallex.transformer import (
-    AdaptiveLayerNorm,
-    LayerNorm,
-    TransformerDecoderLayer,
-    TransformerEncoderLayer,
-)
-from vallex.utils import make_pad_mask
 import torch.nn.functional as F
-import random
-from vallex.utils import topk_sampling
+
+from vallex.embedding import (PositionalEncoding, SinePositionalEmbedding,
+                              TokenEmbedding)
+from vallex.transformer import (AdaptiveLayerNorm, LayerNorm,
+                                TransformerDecoderLayer,
+                                TransformerEncoderLayer)
+from vallex.utils import make_pad_mask, topk_sampling
 
 NUM_TEXT_TOKENS = 512
 NUM_AUDIO_TOKENS = 1024  # EnCodec RVQ bins
@@ -92,6 +91,20 @@ class VALLE(nn.Module):
 
         self.rng = random.Random(0)
     
+    def stage_named_parameters(
+        self, stage: int = 1
+    ) -> Iterator[Tuple[str, nn.Parameter]]:
+        assert stage > 0
+        if stage == 1:
+            for pair in self.named_parameters():
+                if pair[0].startswith("ar_"):
+                    yield pair
+
+        if stage == 2:
+            for pair in self.named_parameters():
+                if pair[0].startswith("nar_"):
+                    yield pair
+
     def forward(
         self,
         x: torch.Tensor,

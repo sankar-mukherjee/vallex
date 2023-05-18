@@ -27,7 +27,7 @@
 	"runArgs": ["--gpus=all", "--ipc=host", "-p=5021:5021"],
 	// Uncomment to use the Docker CLI from inside the container. See https://aka.ms/vscode-remote/samples/docker-from-docker.
 	//"mounts": [ "source=/var/run/docker.sock,target=/var/run/docker.sock,type=bind" ],
-	"mounts": ["src=/mnt/,target=/mnt/,type=bind"],
+	"mounts": ["src=/home/,target=/home/,type=bind"],
 
 	// Uncomment to connect as a non-root user if you've added one. See https://aka.ms/vscode-remote/containers/non-root.
 	// "remoteUser": "vscode"

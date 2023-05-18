@@ -12,8 +12,6 @@ from encodec.utils import convert_audio
 from torch import Tensor
 from tqdm import tqdm
 
-# from config import cfg
-
 
 @cache
 def _load_model(device="cuda"):
