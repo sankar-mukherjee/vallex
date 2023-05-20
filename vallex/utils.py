@@ -1,9 +1,100 @@
 import torch
+from typing import Any, Dict, List, Optional, Union
+import torch.nn as nn
+from pathlib import Path
+import logging
+from torch.optim import Optimizer
+from torch.cuda.amp import GradScaler
+import torch.nn.functional as F
+from vallex.optim import ScaledAdam
 
+LRSchedulerType = object
+
+def get_autocast_type(dtype):
+    autocast_dtype, enabled = torch.float32, False
+    if dtype in ["bfloat16", "bf16"]: autocast_dtype, enabled = torch.bfloat16, True
+    elif dtype in ["float16", "fp16"]: autocast_dtype, enabled = torch.float16, True
+    return autocast_dtype, enabled
+
+def get_device():
+    device = torch.device("cpu")
+    if torch.cuda.is_available():
+        device = torch.device("cuda")
+        # https://pytorch.org/docs/stable/notes/cuda.html#tensorfloat-32-tf32-on-ampere-devices
+        torch.backends.cudnn.allow_tf32 = True
+        torch.backends.cuda.matmul.allow_tf32 = True
+    return device
+
+def get_optimizer(model, learning_rate):
+    # optimizer = Optimizer.Adam(model.parameters(), lr=args.learning_rate)
+
+    parameters_names = []
+    parameters_names.append([
+        name_param_pair[0] for name_param_pair in model.named_parameters()
+    ])
+    optimizer = ScaledAdam(model.parameters(), lr=learning_rate,
+            betas=(0.9, 0.95),
+            clipping_scale=2.0,
+            parameters_names=parameters_names,
+            show_dominant_parameters=False,
+            clipping_update_period=1000,
+        )
+    optimizer.zero_grad()
+    return optimizer
 
 def to_gpu(x):
     x = x.contiguous()
     return x.cuda(non_blocking=True) if torch.cuda.is_available() else x
+
+def save_checkpoint(out_dir, epoch, model,optimizer, scheduler, scaler):
+    out_dir = Path(out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    filename = out_dir / f"checkpoint_epoch-{epoch}.pt"
+    print(f"Saving checkpoint to {filename}")
+
+    checkpoint = {
+        "model": model.state_dict(),
+        "optimizer": optimizer.state_dict() if optimizer is not None else None,
+        "scheduler": scheduler.state_dict() if scheduler is not None else None,
+        "grad_scaler": scaler.state_dict() if scaler is not None else None,
+    }
+    torch.save(checkpoint, filename)
+
+def load_checkpoint(
+    output_dir: Path,
+    model: nn.Module,
+    optimizer: Optional[Optimizer] = None,
+    scheduler: Optional[LRSchedulerType] = None,
+    scaler: Optional[GradScaler] = None,
+    strict: bool = False,
+) -> Dict[str, Any]:
+    
+    checkpoint_paths = list(output_dir.rglob("checkpoint_epoch-*.pt"))
+    if len(checkpoint_paths)>=1:
+        last_epoch = 1
+        filename = output_dir / f"checkpoint_epoch-{last_epoch}.pt"
+    else:
+        return None
+    
+    assert filename.is_file(), f"{filename} does not exist!"
+
+    logging.info(f"Loading checkpoint from {filename}")
+    checkpoint = torch.load(filename, map_location="cpu")
+
+    model.load_state_dict(checkpoint["model"], strict=strict)
+    checkpoint.pop("model")
+
+    def load(name, obj):
+        s = checkpoint.get(name, None)
+        if obj and s:
+            obj.load_state_dict(s)
+            checkpoint.pop(name)
+
+    load("optimizer", optimizer)
+    load("scheduler", scheduler)
+    load("grad_scaler", scaler)
+
+    return checkpoint
 
 def make_pad_mask(lengths: torch.Tensor, max_len: int = 0) -> torch.Tensor:
     """
@@ -31,7 +122,6 @@ def make_pad_mask(lengths: torch.Tensor, max_len: int = 0) -> torch.Tensor:
     expaned_lengths = seq_range.unsqueeze(0).expand(n, max_len)
 
     return expaned_lengths >= lengths.unsqueeze(-1)
-
 
 # https://github.com/microsoft/unilm/blob/master/xtune/src/transformers/modeling_utils.py
 def top_k_top_p_filtering(

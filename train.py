@@ -1,9 +1,8 @@
 import argparse
 from pathlib import Path
-
+import logging
 import torch
 import torch.nn as nn
-import torch.optim as optim
 from torch.cuda.amp import GradScaler
 from torch.utils.data import DataLoader
 from torch.utils.tensorboard import SummaryWriter
@@ -13,7 +12,11 @@ from vallex.dataset import TTSDataset, collate_fn
 from vallex.loss import compute_loss
 # from vallex.model import VALLE
 from vallex.model2 import VALLE
-from vallex.optim import Eden, Eve, ScaledAdam
+from vallex.optim import Eden
+from vallex.utils import (
+    load_checkpoint, save_checkpoint, 
+    get_optimizer, get_device, get_autocast_type
+)
 
 
 def parse_argument():
@@ -42,14 +45,8 @@ def parse_argument():
 
 if __name__ == "__main__":
     args = parse_argument()
-
-    device = torch.device("cpu")
-    if torch.cuda.is_available():
-        device = torch.device("cuda")
-        # https://pytorch.org/docs/stable/notes/cuda.html#tensorfloat-32-tf32-on-ampere-devices
-        torch.backends.cudnn.allow_tf32 = True
-        torch.backends.cuda.matmul.allow_tf32 = True
-
+    
+    device = get_device()
 
     dataset = TTSDataset(
         args.data_dir, 
@@ -59,36 +56,34 @@ if __name__ == "__main__":
         )
     dataloader = DataLoader(dataset, batch_size=args.batch_size, shuffle=True, collate_fn=collate_fn)
 
-    # Define your training loop
-    model = VALLE(args.decoder_dim, args.num_heads, args.num_decoder_layers).to(device)
+    # model
+    model = VALLE(args.decoder_dim, args.num_heads, args.num_decoder_layers)    
+    # loss
     criterion = compute_loss(device)
-
-    # optimizer = optim.Adam(model.parameters(), lr=args.learning_rate)
-
-    parameters_names = []
-    parameters_names.append([
-        name_param_pair[0] for name_param_pair in model.named_parameters()
-    ])
-    optimizer = ScaledAdam(model.parameters(), lr=args.learning_rate,
-            betas=(0.9, 0.95),
-            clipping_scale=2.0,
-            parameters_names=parameters_names,
-            show_dominant_parameters=False,
-            clipping_update_period=1000,
-        )
-    optimizer.zero_grad()
+    # optimizer
+    optimizer = get_optimizer(model, args.learning_rate)
+    # scheduler
     scheduler = Eden(optimizer, 5000, 4, warmup_batches=args.warmup_steps)
+    # scaler
     scaler = GradScaler(enabled=(args.dtype in ["fp16", "float16"]), init_scale=1.0)
+    
+    # check previous chekpoints
+    checkpoints = load_checkpoint(
+        args.output_dir, 
+        model,
+        optimizer,
+        scheduler,
+        scaler,
+        )
+    model.to(device)
+
+    # autocast_type
+    dtype, enabled = get_autocast_type(args.dtype)
 
     writer = SummaryWriter()
-
-    dtype, enabled = torch.float32, False
-    if args.dtype in ["bfloat16", "bf16"]: dtype, enabled = torch.bfloat16, True
-    elif args.dtype in ["float16", "fp16"]: dtype, enabled = torch.float16, True
-
     is_training = True
     num_epochs = args.num_epochs
-
+    # training loop
     for epoch in range(num_epochs):
         if isinstance(scheduler, Eden):
             scheduler.step_epoch(epoch - 1)
@@ -127,7 +122,8 @@ if __name__ == "__main__":
 
         epoch_loss = running_loss / len(dataloader)
         writer.add_scalar('Loss/train', epoch_loss, epoch)
-
         print('Epoch %d loss: %.3f' % (epoch + 1, epoch_loss))
+
+        save_checkpoint(args.output_dir, epoch, model,optimizer, scheduler, scaler)
 
     writer.close()
