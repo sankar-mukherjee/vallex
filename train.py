@@ -22,7 +22,8 @@ from vallex.utils import (
 def parse_argument():
     parser = argparse.ArgumentParser()
     parser.add_argument("--data_dir", type=Path)
-    parser.add_argument("--metadata_csv", type=Path)
+    parser.add_argument("--metadata_csv_train", type=Path)
+    parser.add_argument("--metadata_csv_val", type=Path)
     parser.add_argument("--output_dir", type=Path)
 
     parser.add_argument("--learning_rate", type=float, default=0.1)
@@ -43,23 +44,101 @@ def parse_argument():
 
     return args
 
-if __name__ == "__main__":
-    args = parse_argument()
-    
-    device = get_device()
-
-    dataset = TTSDataset(
+def load_datasets(args):
+    # train
+    train_dataset = TTSDataset(
         args.data_dir, 
-        args.metadata_csv,
+        args.metadata_csv_train,
         args.filter_min_duration,
         args.filter_max_duration,
         )
-    dataloader = DataLoader(dataset, batch_size=args.batch_size, shuffle=True, collate_fn=collate_fn)
+    train_dataloader = DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True, collate_fn=collate_fn)
+    # valid
+    val_dataset = TTSDataset(
+        args.data_dir, 
+        args.metadata_csv_val,
+        args.filter_min_duration,
+        args.filter_max_duration,
+        )
+    val_dataloader = DataLoader(val_dataset, batch_size=args.batch_size, shuffle=False, collate_fn=collate_fn)
+    return train_dataloader, val_dataloader
 
+def evaluate(model, val_dataloader, loss_criterion, dtype):
+    logging.info("Computing validation loss")
+
+    model.eval()
+
+    running_loss = 0.0
+    for i, batch in enumerate(val_dataloader):
+        audio_embs, audio_lens, text_embs, text_lens, _ = batch
+        with torch.cuda.amp.autocast(dtype=dtype):
+            _, ar_logits, ar_targets, nar_logits, nar_targets = model(text_embs, text_lens, audio_embs, audio_lens)
+            loss, loss_info = loss_criterion(audio_lens, ar_logits, ar_targets, nar_logits, nar_targets)
+            assert loss.requires_grad is False
+            running_loss += loss
+    val_loss = running_loss / len(train_dataloader)
+
+    model.train()
+    return val_loss
+
+def train_one_epoch(
+        train_dataloader,
+        optimizer,
+        scheduler,
+        scaler,
+        args,
+        dtype, enabled
+    ):
+    logging.info("Computing training loss")
+
+    running_loss = 0.0
+    progress_bar = tqdm(train_dataloader)
+    for i, data in enumerate(progress_bar):
+        audio_embs, audio_lens, text_embs, text_lens, speaker = data
+        
+        args.batch_idx_train += 1
+        with torch.cuda.amp.autocast(dtype=dtype, enabled=enabled):
+            with torch.set_grad_enabled(True):
+                codes, ar_logits, ar_targets, nar_logits, nar_targets = model(text_embs, text_lens, audio_embs, audio_lens)
+                loss, loss_info = loss_criterion(audio_lens, ar_logits, ar_targets, nar_logits, nar_targets)
+            assert loss.requires_grad == True
+
+        if args.batch_idx_train >= args.accumulate_grad_steps:
+            if args.batch_idx_train % args.accumulate_grad_steps == 0:
+                scaler.scale(loss).backward()
+                scaler.step(optimizer)
+                scaler.update()
+                optimizer.zero_grad()
+
+                for k in range(args.accumulate_grad_steps):
+                    if isinstance(scheduler, Eden):
+                        scheduler.step_batch(args.batch_idx_train)
+                    else:
+                        scheduler.step()
+
+        running_loss += loss
+        
+        # add stuff to progress bar in the end
+        progress_bar.set_description(f"Epoch [{epoch}/{args.num_epochs}]")
+        progress_bar.set_postfix(loss=f"{loss:.3f}")
+        # print('Batch %d loss: %.3f' % (i + 1, running_loss))
+
+    epoch_loss = running_loss / len(train_dataloader)
+    return epoch_loss
+
+if __name__ == "__main__":
+    args = parse_argument()
+    
+    # tensorboard
+    tb_writer = SummaryWriter()
+    device = get_device()
+
+    # dataset
+    train_dataloader, val_dataloader = load_datasets(args)
     # model
     model = VALLE(args.decoder_dim, args.num_heads, args.num_decoder_layers)    
     # loss
-    criterion = compute_loss(device)
+    loss_criterion = compute_loss(device)
     # optimizer
     optimizer = get_optimizer(model, args.learning_rate)
     # scheduler
@@ -80,50 +159,21 @@ if __name__ == "__main__":
     # autocast_type
     dtype, enabled = get_autocast_type(args.dtype)
 
-    writer = SummaryWriter()
-    is_training = True
-    num_epochs = args.num_epochs
     # training loop
-    for epoch in range(num_epochs):
-        if isinstance(scheduler, Eden):
-            scheduler.step_epoch(epoch - 1)
+    for epoch in range(args.num_epochs):
+        if isinstance(scheduler, Eden): scheduler.step_epoch(epoch - 1)
 
-        running_loss = 0.0
-        progress_bar = tqdm(dataloader)
-        for i, data in enumerate(progress_bar):
-            audio_embs, audio_lens, text_embs, text_lens, speaker = data
-            
-            args.batch_idx_train += 1
-            with torch.cuda.amp.autocast(dtype=dtype, enabled=enabled):
-                with torch.set_grad_enabled(is_training):
-                    codes, ar_logits, ar_targets, nar_logits, nar_targets = model(text_embs, text_lens, audio_embs, audio_lens)
-                    loss, loss_info = criterion(audio_lens, ar_logits, ar_targets, nar_logits, nar_targets)
-                assert loss.requires_grad == is_training
+        train_loss = train_one_epoch(train_dataloader, optimizer, scheduler, scaler, args, dtype, enabled)
+        tb_writer.add_scalar('Loss/train', train_loss, epoch)
+        # print('Epoch %d loss: %.3f' % (epoch + 1, epoch_loss))
 
-            if args.batch_idx_train >= args.accumulate_grad_steps:
-                if args.batch_idx_train % args.accumulate_grad_steps == 0:
-                    scaler.scale(loss).backward()
-                    scaler.step(optimizer)
-                    scaler.update()
-                    optimizer.zero_grad()
+        # evaluate after each epoch
+        val_loss = evaluate(model, val_dataloader, loss_criterion, dtype)
+        tb_writer.add_scalar('Loss/valid', val_loss, epoch)
 
-                    for k in range(args.accumulate_grad_steps):
-                        if isinstance(scheduler, Eden):
-                            scheduler.step_batch(args.batch_idx_train)
-                        else:
-                            scheduler.step()
-
-            running_loss += loss
-            
-            # add stuff to progress bar in the end
-            progress_bar.set_description(f"Epoch [{epoch}/{num_epochs}]")
-            progress_bar.set_postfix(loss=f"{loss:.3f}")
-            # print('Batch %d loss: %.3f' % (i + 1, running_loss))
-
-        epoch_loss = running_loss / len(dataloader)
-        writer.add_scalar('Loss/train', epoch_loss, epoch)
-        print('Epoch %d loss: %.3f' % (epoch + 1, epoch_loss))
-
+        # save
         save_checkpoint(args.output_dir, epoch, model,optimizer, scheduler, scaler)
 
-    writer.close()
+    tb_writer.close()
+    logging.info("Done!")
+    print('inished traning')

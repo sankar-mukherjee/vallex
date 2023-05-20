@@ -57,7 +57,9 @@
                 // "--output_dir=output/test",
 
                 "--data_dir=data/LibriTTS",
-                "--metadata_csv=data/LibriTTS/metadata.csv",
+                "--metadata_csv_train=data/LibriTTS/metadata_train.csv",
+                "--metadata_csv_val=data/LibriTTS/metadata_val.csv",
+
                 "--output_dir=output/LibriTTS",
 
                 "--learning_rate=0.05",

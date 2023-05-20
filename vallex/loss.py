@@ -36,9 +36,9 @@ class compute_loss(nn.Module):
             ar_targets, 
             reduction=self.reduction
         )
-        metrics["ArTop10Accuracy"] = self.ar_accuracy_metric(
-        ar_logits.detach(), ar_targets
-        ).item() * y_lens.sum().type(torch.float32)
+        # metrics["ArTop10Accuracy"] = self.ar_accuracy_metric(
+        # ar_logits.detach(), ar_targets
+        # ).item() * y_lens.sum().type(torch.float32)
 
         # NAR loss
         total_loss += F.cross_entropy(
@@ -47,15 +47,15 @@ class compute_loss(nn.Module):
             ignore_index=NUM_AUDIO_TOKENS,
             reduction=self.reduction,
         )
-        metrics["NarTop10Accuracy"] = (
-            self.nar_accuracy_metric(
-                F.pad(
-                    nar_logits.detach(),
-                    (0, 0, 0, 1, 0, 0),
-                    value=nar_logits.min().cpu().item(),
-                ),
-                nar_targets,
-            ).item() * y_lens.sum().type(torch.float32)
-        )
+        # metrics["NarTop10Accuracy"] = (
+        #     self.nar_accuracy_metric(
+        #         F.pad(
+        #             nar_logits.detach(),
+        #             (0, 0, 0, 1, 0, 0),
+        #             value=nar_logits.min().cpu().item(),
+        #         ),
+        #         nar_targets,
+        #     ).item() * y_lens.sum().type(torch.float32)
+        # )
 
         return total_loss / 2.0, metrics
