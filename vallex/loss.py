@@ -26,7 +26,7 @@ class compute_loss(nn.Module):
             ignore_index=NUM_AUDIO_TOKENS,
         ).to(device)
 
-    def forward(self, y_lens, ar_logits, ar_targets, nar_logits, nar_targets):
+    def forward(self, ar_logits, ar_targets, nar_logits, nar_targets, nar_loss_norm_factor, total_length):
 
         total_loss, metrics = 0.0, {}
         
@@ -46,7 +46,8 @@ class compute_loss(nn.Module):
             nar_targets,
             ignore_index=NUM_AUDIO_TOKENS,
             reduction=self.reduction,
-        )
+        ) * nar_loss_norm_factor
+
         # metrics["NarTop10Accuracy"] = (
         #     self.nar_accuracy_metric(
         #         F.pad(
@@ -55,7 +56,7 @@ class compute_loss(nn.Module):
         #             value=nar_logits.min().cpu().item(),
         #         ),
         #         nar_targets,
-        #     ).item() * y_lens.sum().type(torch.float32)
+        #     ).item() * total_length
         # )
 
         return total_loss / 2.0, metrics

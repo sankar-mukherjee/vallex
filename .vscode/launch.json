@@ -59,6 +59,7 @@
                 "--data_dir=data/LibriTTS",
                 "--metadata_csv_train=data/LibriTTS/metadata_train.csv",
                 "--metadata_csv_val=data/LibriTTS/metadata_val.csv",
+                "--unique_text_tokens=data/LibriTTS/unique_text_tokens.k2symbols",                
 
                 "--output_dir=output/LibriTTS",
 

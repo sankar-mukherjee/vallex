@@ -7,9 +7,7 @@ import torch.nn.functional as F
 
 from vallex.embedding import (PositionalEncoding, SinePositionalEmbedding,
                               TokenEmbedding)
-from vallex.transformer import (AdaptiveLayerNorm, LayerNorm,
-                                TransformerDecoderLayer,
-                                TransformerEncoderLayer)
+from vallex.transformer import AdaptiveLayerNorm
 from vallex.utils import make_pad_mask, topk_sampling
 
 NUM_TEXT_TOKENS = 512
@@ -22,13 +20,7 @@ class VALLE(nn.Module):
         d_model: int,
         num_heads: int,
         num_layers: int,
-        norm_first: bool = True,
-        decoder_cls: Union[
-            nn.TransformerDecoder, nn.TransformerEncoder
-        ] = nn.TransformerDecoder,
-        decoder_layer_cls: Union[
-            TransformerDecoderLayer, TransformerEncoderLayer
-        ] = TransformerDecoderLayer,
+        norm_first: bool = True
         ):
         super(VALLE, self).__init__()
 
@@ -44,15 +36,19 @@ class VALLE(nn.Module):
         self.audio_prenet = nn.Identity()
 
         # TODO
-        self.text_position = SinePositionalEmbedding(d_model,dropout=0.1,scale=False)
-        self.audio_positions = nn.ModuleList([SinePositionalEmbedding(d_model,dropout=0.1,scale=False) for i in range(8)])
+        # self.text_position = SinePositionalEmbedding(d_model,dropout=0.1,scale=False)
+        # self.audio_positions = nn.ModuleList([SinePositionalEmbedding(d_model,dropout=0.1,scale=False) for i in range(8)])
+        self.text_position = PositionalEncoding(d_model,dropout=0.1)
+        self.audio_positions = nn.ModuleList(
+            [PositionalEncoding(d_model,dropout=0.1) for i in range(8)]
+        )
 
         self.stage_embeddings = nn.ModuleList(
             [TokenEmbedding(d_model, 1) for i in range(8)]
         )
 
-        self.ar_decoder = decoder_cls(
-            decoder_layer_cls(
+        self.ar_decoder = nn.TransformerDecoder(
+            nn.TransformerDecoderLayer(
                 d_model,
                 num_heads,
                 dim_feedforward=d_model * 4,
@@ -61,21 +57,22 @@ class VALLE(nn.Module):
                 norm_first=norm_first,
             ),
             num_layers=num_layers,
-            norm=LayerNorm(d_model) if norm_first else None,
+            norm=nn.LayerNorm(d_model) if norm_first else None,
         )
 
-        self.nar_decoder = decoder_cls(
-            decoder_layer_cls(
+        self.nar_decoder = nn.TransformerDecoder(
+            nn.TransformerDecoderLayer(
                 d_model,
                 num_heads,
                 dim_feedforward=d_model * 4,
                 dropout=0.1,
                 batch_first=True,
                 norm_first=norm_first,
-                adaptive_layer_norm=True,
             ),
             num_layers=num_layers,
-            norm=AdaptiveLayerNorm(d_model, norm=nn.LayerNorm(d_model)) if norm_first else None,
+            norm=nn.LayerNorm(d_model) if norm_first else None,
+            # TODO
+            # norm=AdaptiveLayerNorm(d_model, norm=nn.LayerNorm(d_model)) if norm_first else None,
         )
 
         self.predict_layers = nn.ModuleList(
@@ -88,23 +85,9 @@ class VALLE(nn.Module):
         # which means the weights of the j-th prediction layer are the same as the (j + 1)-th acoustic embedding layer.
         for j in range(1, 7):
             self.predict_layers[j].weight = self.nar_embeddings[j + 1].weight
-
+            
         self.rng = random.Random(0)
     
-    def stage_named_parameters(
-        self, stage: int = 1
-    ) -> Iterator[Tuple[str, nn.Parameter]]:
-        assert stage > 0
-        if stage == 1:
-            for pair in self.named_parameters():
-                if pair[0].startswith("ar_"):
-                    yield pair
-
-        if stage == 2:
-            for pair in self.named_parameters():
-                if pair[0].startswith("nar_"):
-                    yield pair
-
     def forward(
         self,
         x: torch.Tensor,
@@ -136,8 +119,8 @@ class VALLE(nn.Module):
             torch.ones(y_len, y_len, device=y.device, dtype=torch.bool),
             diagonal=1
         )        
-        y_dec, _ = self.ar_decoder(
-            tgt=(y_pos, None),
+        y_dec = self.ar_decoder(
+            tgt=y_pos,
             memory=x,
             tgt_mask=tgt_mask,
             memory_mask=None,
@@ -160,8 +143,8 @@ class VALLE(nn.Module):
         y_pos = self.audio_positions[train_stage](y_emb)
         nar_targets = codes[..., train_stage] + NUM_AUDIO_TOKENS * y_mask_int
 
-        y_dec, _ = self.nar_decoder(
-            tgt=(y_pos, self.stage_embeddings[train_stage].weight),
+        y_dec = self.nar_decoder(
+            tgt=y_pos,
             memory=x,
             tgt_mask=None,
             memory_mask=None,
@@ -227,8 +210,8 @@ class VALLE(nn.Module):
             )
 
             y_dec, _ = self.ar_decoder(
-                (y_pos, None),
-                x,
+                tgt=y_pos,
+                memory=x,
                 tgt_mask=tgt_mask,
                 memory_mask=None,
                 memory_key_padding_mask=x_mask,
@@ -260,8 +243,8 @@ class VALLE(nn.Module):
         ):
             y_pos = self.audio_positions[i + 1](y_emb)
             y_dec, _ = self.nar_decoder(
-                (y_pos, self.stage_embeddings[i + 1].weight),
-                x,
+                tgt=y_pos,
+                memory=x,
                 tgt_mask=None,
                 memory_mask=None,
                 memory_key_padding_mask=x_mask,
@@ -277,4 +260,3 @@ class VALLE(nn.Module):
 
         assert len(codes) == 8
         return torch.stack(codes, dim=-1)
-    

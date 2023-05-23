@@ -6,6 +6,11 @@ import numpy as np
 
 import sox
 from tqdm import tqdm
+# import sys
+# sys.path.append('embeddings')
+
+from tokenizer import TextTokenizer, tokenize_text
+from symbol_table import SymbolTable
 
 def filter_speaker_list(lines, category_index, count):
     speakers = list(map(lambda line: line.strip().split('|')[category_index], lines))
@@ -21,6 +26,11 @@ def filter_speaker_list(lines, category_index, count):
 
     return target_lines, target_speakers, val_lines, val_speakers
 
+def _get_text(path):
+    with open(path, "r", encoding="utf8") as f:
+        content = f.read()
+    return content
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--folder", type=Path)
@@ -34,14 +44,37 @@ if __name__ == "__main__":
     csv_file = open(str(args.folder)+'/metadata.csv', "w", encoding='utf8')
     for path in tqdm(paths):
         audio_file_path = str(path)
-        phone_file_path = audio_file_path.replace('.qnt.pt', '.phn.txt')
+        phone_file_path = audio_file_path.replace('.qnt.pt', '.normalized.txt')
+
+        text = _get_text(phone_file_path)
         speaker_id = audio_file_path.split('/')[-1].split('_')[0]
         duration = sox.file_info.duration(audio_file_path.replace('.qnt.pt', '.wav'))
-        write_line =  audio_file_path + '|' + phone_file_path + '|' + str(speaker_id) + '|' + str(duration) + '\n'
+
+        write_line =  audio_file_path + '|' + text + '|' + str(speaker_id) + '|' + str(duration) + '\n'
         csv_file.write(write_line)
     csv_file.close()
 
+    # unique symbols
+    print('get unique symbols')
+    with open(str(args.folder)+'/metadata.csv', 'r') as f:
+        lines = f.readlines()
+    f.close()
+
+    text_tokenizer = TextTokenizer()
+    unique_symbols = set()
+    for line in tqdm(lines):
+        text = line.split('|')[1]
+        phonemes = tokenize_text(text_tokenizer, text=text)
+        unique_symbols.update(list(phonemes))
+
+    unique_phonemes = SymbolTable()
+    for s in sorted(list(unique_symbols)):
+        unique_phonemes.add(s)
+    unique_phonemes_file = f"{args.folder}/unique_text_tokens.k2symbols"
+    unique_phonemes.to_file(unique_phonemes_file)
+
     # train val
+    print('get train and val data')
     with open(str(args.folder)+'/metadata.csv', 'r') as f:
         lines = f.readlines()
     f.close()
@@ -63,3 +96,5 @@ if __name__ == "__main__":
     csv_file.writelines(val_lines)
     csv_file.close()
 
+    #
+    print('done!')

@@ -2,11 +2,12 @@ import torch
 from typing import Any, Dict, List, Optional, Union
 import torch.nn as nn
 from pathlib import Path
-import logging
 from torch.optim import Optimizer
 from torch.cuda.amp import GradScaler
 import torch.nn.functional as F
 from vallex.optim import ScaledAdam
+import matplotlib.pyplot as plt
+import torchaudio
 
 LRSchedulerType = object
 
@@ -46,7 +47,7 @@ def to_gpu(x):
     x = x.contiguous()
     return x.cuda(non_blocking=True) if torch.cuda.is_available() else x
 
-def save_checkpoint(out_dir, epoch, model,optimizer, scheduler, scaler):
+def save_checkpoint(out_dir, epoch, model,optimizer, scheduler, scaler, total_iter):
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     filename = out_dir / f"checkpoint_epoch-{epoch}.pt"
@@ -57,6 +58,7 @@ def save_checkpoint(out_dir, epoch, model,optimizer, scheduler, scaler):
         "optimizer": optimizer.state_dict() if optimizer is not None else None,
         "scheduler": scheduler.state_dict() if scheduler is not None else None,
         "grad_scaler": scaler.state_dict() if scaler is not None else None,
+        "total_iter": total_iter,
     }
     torch.save(checkpoint, filename)
 
@@ -67,18 +69,19 @@ def load_checkpoint(
     scheduler: Optional[LRSchedulerType] = None,
     scaler: Optional[GradScaler] = None,
     strict: bool = False,
+    total_iter: int = 0,
 ) -> Dict[str, Any]:
     
     checkpoint_paths = list(output_dir.rglob("checkpoint_epoch-*.pt"))
-    if len(checkpoint_paths)>=1:
-        last_epoch = 1
+    if len(checkpoint_paths)>0:
+        last_epoch = max(list(map(lambda checkpoint_path: int(checkpoint_path.stem.split('-')[-1]), checkpoint_paths)))
         filename = output_dir / f"checkpoint_epoch-{last_epoch}.pt"
     else:
         return None
     
     assert filename.is_file(), f"{filename} does not exist!"
 
-    logging.info(f"Loading checkpoint from {filename}")
+    print(f"Loading checkpoint from {filename}")
     checkpoint = torch.load(filename, map_location="cpu")
 
     model.load_state_dict(checkpoint["model"], strict=strict)
@@ -93,6 +96,7 @@ def load_checkpoint(
     load("optimizer", optimizer)
     load("scheduler", scheduler)
     load("grad_scaler", scaler)
+    load("total_iter", total_iter)
 
     return checkpoint
 
@@ -184,3 +188,24 @@ def topk_sampling(logits, top_k=10, top_p=1.0, temperature=1.0):
     # Sample
     token = torch.multinomial(F.softmax(logits, dim=-1), num_samples=1)
     return token
+
+def plot_spectrogram(spectrogram, fig_size=(12, 6)):
+    if isinstance(spectrogram, torch.Tensor):
+        spectrogram_ = spectrogram.detach().cpu().numpy().squeeze()
+
+    fig = plt.figure(figsize=fig_size)
+    plt.imshow(spectrogram_, aspect="auto", origin="lower")
+    plt.colorbar()
+    plt.tight_layout()
+    return fig
+
+def read_audio_waveform(audio_path):
+    wav, sr = torchaudio.load(audio_path)
+    if wav.shape[0] == 2:
+        wav = wav[:1]
+    return wav
+
+def get_mel_specgram(waveform, sample_rate):
+    transform = torchaudio.transforms.MelSpectrogram(sample_rate)
+    mel_specgram = transform(waveform.to('cpu'))
+    return mel_specgram

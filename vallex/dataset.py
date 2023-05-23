@@ -8,6 +8,8 @@ from torch.utils.data import Dataset
 from tqdm import tqdm
 
 from vallex.utils import to_gpu
+from embeddings.tokenizer import TextTokenizer, tokenize_text
+from embeddings.collation import get_text_token_collater
 
 
 def load_filepaths_and_text(metadata_csv, split="|"):
@@ -21,18 +23,13 @@ def load_filepaths_and_text(metadata_csv, split="|"):
         fpaths_and_text += [split_line(line) for line in f]
     return fpaths_and_text
 
-
-def _get_phones(path):
-    with open(path, "r", encoding="utf8") as f:
-        content = f.read()
-    return ["<s>"] + content.split() + ["</s>"]
-
 # Define your dataset and dataloader
 class TTSDataset(Dataset):
     def __init__(
             self, 
             data_dir, 
             metadata_csv,
+            unique_text_tokens,
             min_duration,
             max_duration,
         ):
@@ -42,22 +39,16 @@ class TTSDataset(Dataset):
                                                 (min_duration < float(x[-1]) and float(x[-1]) > max_duration), 
                                                 self.audio_and_text_paths))
 
-        self.phone_symmap = self._get_phone_symmap()
-
-    def _get_phone_symmap(self):
-        # Note that we use phone symmap starting from 1 so that we can safely pad 0.
-        return {s: i for i, s in enumerate(self.phones, 1)}
-    
-    @cached_property
-    def phones(self):
-        return sorted(set().union(*[_get_phones(path[1]) for path in self.audio_and_text_paths]))
+        self.text_tokenizer = TextTokenizer()
+        self.text_collater = get_text_token_collater(unique_text_tokens)
     
     def __getitem__(self, index):
-        audiopath, textpath, speaker, *_ = self.audio_and_text_paths[index]
+        audiopath, text, speaker, *_ = self.audio_and_text_paths[index]
         audio_embs = torch.load(audiopath)[0].t()
-        text_emb = torch.tensor([*map(self.phone_symmap.get, _get_phones(textpath))])
-
-        return audio_embs, text_emb, torch.tensor(int(speaker))
+        phonemes = tokenize_text(self.text_tokenizer, text=text)
+        text_emb, _ = self.text_collater([phonemes])
+        
+        return audio_embs, text_emb.t(), torch.tensor(int(speaker))
     
     def __len__(self):
         return len(self.audio_and_text_paths)
@@ -69,7 +60,8 @@ def collate_fn(batch):
     
     # Pad the text inputs to the maximum length in the batch
     padded_texts = pad_sequence(texts, batch_first=True)
-    
+    padded_texts = torch.squeeze(padded_texts)
+
     # Pad the audio inputs to the maximum length in the batch
     padded_audios = pad_sequence(audios, batch_first=True)
     
