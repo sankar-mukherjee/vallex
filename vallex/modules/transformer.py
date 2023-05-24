@@ -6,7 +6,7 @@ import torch
 from torch import Tensor, nn
 from torch.nn import functional as F
 
-from vallex.activation import MultiheadAttention
+from vallex.modules.activation import MultiheadAttention
 
 _shape_t = Union[int, List[int], torch.Size]
 

@@ -20,5 +20,8 @@ WORKDIR /workspace/vallex
 ADD requirements.txt .
 RUN pip install -r requirements.txt
 
+RUN apt update
+RUN apt-get install festival espeak-ng mbrola
+
 ENV NVIDIA_VISIBLE_DEVICES all
 ENV NVIDIA_DRIVER_CAPABILITIES compute,utility
