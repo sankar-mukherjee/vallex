@@ -52,10 +52,7 @@
             "console": "integratedTerminal",
             "justMyCode": false,
             "args":[
-                // "--data_dir=data/test",
-                // "--metadata_csv=data/test/metadata.csv",
-                // "--output_dir=output/test",
-
+                "--debug=1",
                 "--data_dir=data/LibriTTS",
                 "--metadata_csv_train=data/LibriTTS/metadata_train.csv",
                 "--metadata_csv_val=data/LibriTTS/metadata_val.csv",

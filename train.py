@@ -22,6 +22,7 @@ from embeddings.collation import get_text_token_collater
 
 def parse_argument():
     parser = argparse.ArgumentParser()
+    parser.add_argument("--debug", type=int, default=1)
     parser.add_argument("--data_dir", type=Path)
     parser.add_argument("--metadata_csv_train", type=Path)
     parser.add_argument("--metadata_csv_val", type=Path)
@@ -63,14 +64,17 @@ def load_datasets(args):
         args.filter_min_duration,
         args.filter_max_duration,
         )
-    # train_dataloader = DataLoader(train_dataset, batch_size=args.batch_size, collate_fn=collate_fn, shuffle=True)
-    # val_dataloader = DataLoader(val_dataset, batch_size=args.batch_size, shuffle=False, collate_fn=collate_fn)
-
-    # debug
-    subset_indices = list(range(100))
-    sampler = SubsetRandomSampler(subset_indices)
-    train_dataloader = DataLoader(train_dataset, batch_size=args.batch_size, collate_fn=collate_fn, sampler=sampler)
-    val_dataloader = DataLoader(val_dataset, batch_size=args.batch_size, collate_fn=collate_fn, sampler=sampler)
+    
+    if args.debug:
+        # debug
+        print('Running in debugg mode')
+        subset_indices = list(range(100))
+        sampler = SubsetRandomSampler(subset_indices)
+        train_dataloader = DataLoader(train_dataset, batch_size=args.batch_size, collate_fn=collate_fn, sampler=sampler)
+        val_dataloader = DataLoader(val_dataset, batch_size=args.batch_size, collate_fn=collate_fn, sampler=sampler)
+    else:
+        train_dataloader = DataLoader(train_dataset, batch_size=args.batch_size, collate_fn=collate_fn, shuffle=True)
+        val_dataloader = DataLoader(val_dataset, batch_size=args.batch_size, shuffle=False, collate_fn=collate_fn)
 
     return train_dataloader, val_dataloader
 
@@ -105,6 +109,7 @@ def synthesize(model, audio_prompt, text_prompt, text, unique_text_tokens, devic
 def evaluate(model, val_dataloader, loss_criterion, total_iter, dtype):
     model.eval()
 
+    print('Running validation...')
     running_loss = 0.0
     for batch in tqdm(val_dataloader):
         audio_embs, audio_lens, text_embs, text_lens, _ = batch
@@ -178,12 +183,16 @@ if __name__ == "__main__":
     args = parse_argument()
     args.output_dir.mkdir(parents=True, exist_ok=True)
     
+    # test
+    test_audio_prompt_path = 'data/LibriTTS/train-clean-100/6181/216552/6181_216552_000079_000002.wav'
+    # test_text_prompt is 6181_216552_000079_000002.normalized.txt
+    test_text_prompt = 'The individual passes away, society is deathless.'
+    test_text = 'To be immortal is, precisely, not to suffer death.'
+
     # tensorboard
     log_fpath = os.path.join(args.output_dir, 'nvlog.json')
     tb_subsets = ['train', 'val']
     logger.init(args.output_dir, tb_subsets=tb_subsets)
-
-    total_iter = 0
     
     device = get_device()
     # dataset
@@ -205,26 +214,28 @@ if __name__ == "__main__":
     scaler = GradScaler(enabled=(args.dtype in ["fp16", "float16"]), init_scale=1.0)
     
     # check previous chekpoints
-    checkpoints = load_checkpoint(
-        args.output_dir, 
-        model,
-        optimizer,
-        scheduler,
-        scaler,
-        total_iter,
-        )
+    checkpoint, last_epoch = load_checkpoint(args.output_dir, model)
     model.to(device)
+
+    total_iter = 0
+    if checkpoint:
+        def load(name, obj):
+            s = checkpoint.get(name, None)
+            if obj and s:
+                obj.load_state_dict(s)
+                checkpoint.pop(name)
+
+        load("optimizer", optimizer)
+        load("scheduler", scheduler)
+        load("grad_scaler", scaler)
+        total_iter = checkpoint["total_iter"]
+    last_epoch = last_epoch if last_epoch else 0
 
     # autocast_type
     dtype, enabled = get_autocast_type(args.dtype)
 
-    test_audio_prompt_path = 'data/LibriTTS/train-clean-100/6181/216552/6181_216552_000079_000002.wav'
-    # test_text_prompt is 6181_216552_000079_000002.normalized.txt
-    test_text_prompt = 'The individual passes away, society is deathless.'
-    test_text = 'To be immortal is, precisely, not to suffer death.'
-
     # training loop
-    for epoch in range(args.num_epochs):
+    for epoch in range(last_epoch, args.num_epochs):
         if isinstance(scheduler, Eden): scheduler.step_epoch(epoch - 1)
 
         train_loss, total_iter = train_one_epoch(
@@ -240,21 +251,21 @@ if __name__ == "__main__":
 
         # synthesize
         synthesized_audio = synthesize(model, test_audio_prompt_path, test_text_prompt, test_text, args.unique_text_tokens, device)
-        
+
         model.train()
 
         ##############################  logs ##################################################
         logger.log(epoch, subset='train', data=OrderedDict([ ('epoch/loss', train_loss)]))
         logger.log(epoch, subset='val', data=OrderedDict([ ('epoch/loss', val_loss)]))
         # spectrogram
-        mel_specgram = get_mel_specgram(synthesized_audio, 24000)
-        logger.log_image(epoch, subset='train',
+        syn_mel_specgram = get_mel_specgram(synthesized_audio, 24000)
+        logger.log_image(epoch, subset='val',
                          data=OrderedDict([
-                             ('spectrogram/synthesized', mel_specgram),
+                             ('spectrogram/synthesized', syn_mel_specgram),
                              ]))
         # audio
         prompt_audio = read_audio_waveform(test_audio_prompt_path)
-        logger.log_audio(epoch, 24000, subset='train',
+        logger.log_audio(epoch, 24000, subset='val',
                          data=OrderedDict([
                              ('audio/prompt', prompt_audio),
                              ('audio/synthesized', synthesized_audio),

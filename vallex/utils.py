@@ -67,11 +67,7 @@ def save_checkpoint(out_dir, epoch, model,optimizer, scheduler, scaler, total_it
 def load_checkpoint(
     output_dir: Path,
     model: nn.Module,
-    optimizer: Optional[Optimizer] = None,
-    scheduler: Optional[LRSchedulerType] = None,
-    scaler: Optional[GradScaler] = None,
     strict: bool = False,
-    total_iter: int = 0,
 ) -> Dict[str, Any]:
     
     checkpoint_paths = list(output_dir.rglob("checkpoint_epoch-*.pt"))
@@ -79,7 +75,7 @@ def load_checkpoint(
         last_epoch = max(list(map(lambda checkpoint_path: int(checkpoint_path.stem.split('-')[-1]), checkpoint_paths)))
         filename = output_dir / f"checkpoint_epoch-{last_epoch}.pt"
     else:
-        return None
+        return None, None
     
     assert filename.is_file(), f"{filename} does not exist!"
 
@@ -88,19 +84,7 @@ def load_checkpoint(
 
     model.load_state_dict(checkpoint["model"], strict=strict)
     checkpoint.pop("model")
-
-    def load(name, obj):
-        s = checkpoint.get(name, None)
-        if obj and s:
-            obj.load_state_dict(s)
-            checkpoint.pop(name)
-
-    load("optimizer", optimizer)
-    load("scheduler", scheduler)
-    load("grad_scaler", scaler)
-    load("total_iter", total_iter)
-
-    return checkpoint
+    return checkpoint, last_epoch
 
 def make_pad_mask(lengths: torch.Tensor, max_len: int = 0) -> torch.Tensor:
     """

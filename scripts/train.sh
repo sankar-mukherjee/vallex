@@ -6,6 +6,7 @@ set -e
 
 # train
 python train.py \
+    --debug=0 \
     --data_dir=$DATA_DIR \
     --metadata_csv_train=$DATA_DIR/metadata_train.csv \
     --metadata_csv_val=$DATA_DIR/metadata_val.csv \
