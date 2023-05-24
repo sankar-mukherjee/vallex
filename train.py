@@ -8,13 +8,13 @@ from tqdm import tqdm
 from vallex.dataset import TTSDataset, collate_fn
 from vallex.loss import compute_loss
 from vallex.model import VALLE
-from vallex.optim import Eden
+from vallex.modules.optim import Eden
 from vallex.utils import (
     load_checkpoint, save_checkpoint, 
     get_optimizer, get_device, get_autocast_type,
     read_audio_waveform, get_mel_specgram
 )
-import vallex.tb_dllogger as logger
+import utils.logger as logger
 import os
 from collections import OrderedDict
 from embeddings.tokenizer import AudioTokenizer, TextTokenizer, tokenize_text, tokenize_audio
@@ -102,31 +102,22 @@ def synthesize(model, audio_prompt, text_prompt, text, unique_text_tokens, devic
     samples = samples[0,:]
     return samples
 
-def evaluate(model, val_dataloader, loss_criterion, epoch, total_iter, dtype):
+def evaluate(model, val_dataloader, loss_criterion, total_iter, dtype):
     model.eval()
+
     running_loss = 0.0
-    progress_bar = tqdm(val_dataloader)
-    for i, batch in enumerate(progress_bar):
+    for batch in tqdm(val_dataloader):
         audio_embs, audio_lens, text_embs, text_lens, _ = batch
         with torch.cuda.amp.autocast(dtype=dtype):
             with torch.set_grad_enabled(False):
                 _, ar_logits, ar_targets, nar_logits, nar_targets, nar_loss_norm_factor, total_length = model(text_embs, text_lens, audio_embs, audio_lens)
                 loss, loss_info = loss_criterion(ar_logits, ar_targets, nar_logits, nar_targets, nar_loss_norm_factor, total_length)
                 assert loss.requires_grad is False
-
         running_loss += loss/(audio_lens).sum()
 
-        # add stuff to progress bar in the end
-        progress_bar.set_description(f"Epoch [{epoch}/{args.num_epochs}]")
-        progress_bar.set_postfix(loss=f"{loss:.3f}")
-        # logs
-        logger.log((epoch,) if epoch is not None else (), tb_total_steps=total_iter,
-                subset='val',
-                data=OrderedDict([
-                        ('loss', loss/(audio_lens).sum())]),
-                    )
-            
     val_loss = running_loss / len(val_dataloader)
+    # logs
+    logger.log(total_iter, subset='val', data=OrderedDict([('loss', val_loss)]))
     return val_loss
 
 def train_one_epoch(
@@ -141,9 +132,7 @@ def train_one_epoch(
     ):
 
     running_loss = 0.0
-    batch_iter = 0
     accumulated_steps = 0
-    num_iters = len(train_dataloader) // args.grad_accumulation
 
     progress_bar = tqdm(train_dataloader)
     for i, data in enumerate(progress_bar):
@@ -168,24 +157,22 @@ def train_one_epoch(
                     scheduler.step_batch(args.batch_idx_train)
                 else:
                     scheduler.step()
+
             total_iter += 1
-            batch_iter += 1
             accumulated_steps = 0
+            # logs
+            logger.log(total_iter, subset='train', data=OrderedDict([('loss', loss/(audio_lens).sum())]))
 
         running_loss += loss/(audio_lens).sum()
         
         # add stuff to progress bar in the end
         progress_bar.set_description(f"Epoch [{epoch}/{args.num_epochs}]")
         progress_bar.set_postfix(loss=f"{loss:.3f}")
-        # logs
-        logger.log((epoch, batch_iter, num_iters), tb_total_steps=total_iter, subset='train',
-                data=OrderedDict([
-                    ('loss', loss/(audio_lens).sum())]))
 
     epoch_loss = running_loss / len(train_dataloader)
     # save
     save_checkpoint(args.output_dir, epoch, model, optimizer, scheduler, scaler, total_iter)
-    return epoch_loss
+    return epoch_loss, total_iter
 
 if __name__ == "__main__":
     args = parse_argument()
@@ -194,8 +181,8 @@ if __name__ == "__main__":
     # tensorboard
     log_fpath = os.path.join(args.output_dir, 'nvlog.json')
     tb_subsets = ['train', 'val']
-    logger.init(log_fpath, args.output_dir, tb_subsets=tb_subsets)
-    logger.parameters(vars(args), tb_subset='train')
+    logger.init(args.output_dir, tb_subsets=tb_subsets)
+
     total_iter = 0
     
     device = get_device()
@@ -240,29 +227,25 @@ if __name__ == "__main__":
     for epoch in range(args.num_epochs):
         if isinstance(scheduler, Eden): scheduler.step_epoch(epoch - 1)
 
-        train_loss = train_one_epoch(
+        train_loss, total_iter = train_one_epoch(
             train_dataloader,
             model,
             optimizer, scheduler, scaler,
             args,
-            epoch, total_iter,
+            epoch, 
+            total_iter,
             dtype, enabled)
         # evaluate after each epoch
-        val_loss = evaluate(model, val_dataloader, loss_criterion, epoch, total_iter, dtype)
+        val_loss = evaluate(model, val_dataloader, loss_criterion, total_iter, dtype)
 
         # synthesize
         synthesized_audio = synthesize(model, test_audio_prompt_path, test_text_prompt, test_text, args.unique_text_tokens, device)
+        
         model.train()
 
-        # logs
-        # logger.log((epoch,), tb_total_steps=None, subset='train',
-        #         data=OrderedDict([
-        #             ('loss', train_loss)]),
-        #             )
-        # logger.log((epoch,), tb_total_steps=None, subset='val',
-        #         data=OrderedDict([
-        #             ('loss', val_loss)]),
-        #             )
+        ##############################  logs ##################################################
+        logger.log(epoch, subset='train', data=OrderedDict([ ('epoch/loss', train_loss)]))
+        logger.log(epoch, subset='val', data=OrderedDict([ ('epoch/loss', val_loss)]))
         # spectrogram
         mel_specgram = get_mel_specgram(synthesized_audio, 24000)
         logger.log_image(epoch, subset='train',
@@ -276,7 +259,6 @@ if __name__ == "__main__":
                              ('audio/prompt', prompt_audio),
                              ('audio/synthesized', synthesized_audio),
                              ]))
-        
         # logger.log_text(epoch, subset='train', data=OrderedDict([('text', audio_text)]))
 
     logger.flush()

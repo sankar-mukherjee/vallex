@@ -5,9 +5,11 @@ from pathlib import Path
 from torch.optim import Optimizer
 from torch.cuda.amp import GradScaler
 import torch.nn.functional as F
-from vallex.optim import ScaledAdam
+from vallex.modules.optim import ScaledAdam
 import matplotlib.pyplot as plt
 import torchaudio
+import librosa
+import numpy as np
 
 LRSchedulerType = object
 
@@ -189,12 +191,14 @@ def topk_sampling(logits, top_k=10, top_p=1.0, temperature=1.0):
     token = torch.multinomial(F.softmax(logits, dim=-1), num_samples=1)
     return token
 
-def plot_spectrogram(spectrogram, fig_size=(12, 6)):
+def plot_spectrogram(spectrogram, fig_size=(6, 3)):
     if isinstance(spectrogram, torch.Tensor):
-        spectrogram_ = spectrogram.detach().cpu().numpy().squeeze()
+        spectrogram = spectrogram.detach().cpu().numpy().squeeze()
+    else:
+        spectrogram = spectrogram.squeeze()
 
     fig = plt.figure(figsize=fig_size)
-    plt.imshow(spectrogram_, aspect="auto", origin="lower")
+    plt.imshow(spectrogram, aspect="auto", origin="lower")
     plt.colorbar()
     plt.tight_layout()
     return fig
@@ -206,6 +210,8 @@ def read_audio_waveform(audio_path):
     return wav
 
 def get_mel_specgram(waveform, sample_rate):
-    transform = torchaudio.transforms.MelSpectrogram(sample_rate)
-    mel_specgram = transform(waveform.to('cpu'))
+    if isinstance(waveform, torch.Tensor):
+        waveform = waveform.detach().cpu().numpy().squeeze()
+    mel_spec = librosa.feature.melspectrogram(y=waveform, sr=sample_rate)
+    mel_specgram = librosa.power_to_db(mel_spec, ref=np.max)
     return mel_specgram

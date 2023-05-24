@@ -20,8 +20,8 @@ import torch.nn as nn
 import torch.nn.functional as F
 from vallex.utils import make_pad_mask
 
-from vallex.embedding import SinePositionalEmbedding, TokenEmbedding
-from vallex.transformer import (
+from vallex.modules.embedding import SinePositionalEmbedding, TokenEmbedding
+from vallex.modules.transformer import (
     AdaptiveLayerNorm,
     LayerNorm,
     TransformerDecoderLayer,
