@@ -1,24 +1,24 @@
 import argparse
+import os
+from collections import OrderedDict
 from pathlib import Path
+
 import torch
-from torch.cuda.amp import GradScaler
 from torch.utils.data import DataLoader, SubsetRandomSampler
 from tqdm import tqdm
 
+import utils.logger as logger
+from embeddings.collation import get_text_token_collater
+from embeddings.tokenizer import (AudioTokenizer, TextTokenizer,
+                                  tokenize_audio, tokenize_text)
 from vallex.dataset import TTSDataset, collate_fn
 from vallex.loss import compute_loss
 from vallex.model import VALLE
-from vallex.modules.optim import Eden
-from vallex.utils import (
-    load_checkpoint, save_checkpoint, 
-    get_optimizer, get_device, get_autocast_type,
-    read_audio_waveform, get_mel_specgram
-)
-import utils.logger as logger
-import os
-from collections import OrderedDict
-from embeddings.tokenizer import AudioTokenizer, TextTokenizer, tokenize_text, tokenize_audio
-from embeddings.collation import get_text_token_collater
+from vallex.utils import (get_autocast_type, get_device, get_mel_specgram,
+                          get_optimizer, get_scaler, get_scheduler,
+                          load_checkpoint, read_audio_waveform,
+                          save_checkpoint)
+
 
 def parse_argument():
     parser = argparse.ArgumentParser()
@@ -29,6 +29,9 @@ def parse_argument():
     parser.add_argument("--unique_text_tokens", type=Path)    
     parser.add_argument("--output_dir", type=Path)
 
+    parser.add_argument("--scheduler_type", type=str, default='Eden')
+    parser.add_argument("--optimizer_type", type=str, default='ScaledAdam')
+    parser.add_argument("--scaler_type", type=str, default='GradScaler')
     parser.add_argument("--learning_rate", type=float, default=0.1)
     parser.add_argument("--decoder_dim", type=int)
     parser.add_argument("--num_heads", type=int)
@@ -158,7 +161,7 @@ def train_one_epoch(
             optimizer.zero_grad()
 
             for k in range(args.grad_accumulation):
-                if isinstance(scheduler, Eden):
+                if scheduler.__class__.__name__ == 'Eden':
                     scheduler.step_batch(args.batch_idx_train)
                 else:
                     scheduler.step()
@@ -167,6 +170,7 @@ def train_one_epoch(
             accumulated_steps = 0
             # logs
             logger.log(total_iter, subset='train', data=OrderedDict([('loss', loss/(audio_lens).sum())]))
+            logger.log(total_iter, subset='train', data=OrderedDict([('lrate', optimizer.param_groups[0]['lr'])]))
 
         running_loss += loss/(audio_lens).sum()
         
@@ -190,7 +194,6 @@ if __name__ == "__main__":
     test_text = 'To be immortal is, precisely, not to suffer death.'
 
     # tensorboard
-    log_fpath = os.path.join(args.output_dir, 'nvlog.json')
     tb_subsets = ['train', 'val']
     logger.init(args.output_dir, tb_subsets=tb_subsets)
     
@@ -207,11 +210,11 @@ if __name__ == "__main__":
     # loss
     loss_criterion = compute_loss(device)
     # optimizer
-    optimizer = get_optimizer(model, args.learning_rate)
+    optimizer = get_optimizer(model, args.optimizer_type, args.learning_rate)
     # scheduler
-    scheduler = Eden(optimizer, 5000, 4, warmup_batches=args.warmup_steps)
+    scheduler = get_scheduler(optimizer, args.scheduler_type, args.warmup_steps)
     # scaler
-    scaler = GradScaler(enabled=(args.dtype in ["fp16", "float16"]), init_scale=1.0)
+    scaler = get_scaler(args.scaler_type, args.dtype)
     
     # check previous chekpoints
     checkpoint, last_epoch = load_checkpoint(args.output_dir, model)
@@ -236,7 +239,7 @@ if __name__ == "__main__":
 
     # training loop
     for epoch in range(last_epoch, args.num_epochs):
-        if isinstance(scheduler, Eden): scheduler.step_epoch(epoch - 1)
+        if args.scheduler_type == 'Eden': scheduler.step_epoch(epoch - 1)
 
         train_loss, total_iter = train_one_epoch(
             train_dataloader,

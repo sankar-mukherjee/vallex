@@ -18,16 +18,13 @@ from typing import Dict, Iterator, List, Tuple, Union
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from vallex.utils import make_pad_mask
 
 from vallex.modules.embedding import SinePositionalEmbedding, TokenEmbedding
-from vallex.modules.transformer import (
-    AdaptiveLayerNorm,
-    LayerNorm,
-    TransformerDecoderLayer,
-    TransformerEncoder,
-    TransformerEncoderLayer,
-)
+from vallex.modules.transformer import (AdaptiveLayerNorm, LayerNorm,
+                                        TransformerDecoderLayer,
+                                        TransformerEncoder,
+                                        TransformerEncoderLayer)
+from vallex.utils import make_pad_mask
 
 NUM_TEXT_TOKENS = 512
 NUM_AUDIO_TOKENS = 1024  # EnCodec RVQ bins

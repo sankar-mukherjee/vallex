@@ -1,15 +1,17 @@
-import torch
-from typing import Any, Dict, List, Optional, Union
-import torch.nn as nn
 from pathlib import Path
-from torch.optim import Optimizer
-from torch.cuda.amp import GradScaler
-import torch.nn.functional as F
-from vallex.modules.optim import ScaledAdam
-import matplotlib.pyplot as plt
-import torchaudio
+from typing import Any, Dict, List, Optional, Union
+
 import librosa
+import matplotlib.pyplot as plt
 import numpy as np
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+import torchaudio
+from torch.cuda.amp import GradScaler
+from torch.optim import Optimizer
+
+from vallex.modules.optim import Eden, ScaledAdam
 
 LRSchedulerType = object
 
@@ -28,22 +30,34 @@ def get_device():
         torch.backends.cuda.matmul.allow_tf32 = True
     return device
 
-def get_optimizer(model, learning_rate):
+def get_optimizer(model, optimizer_type, learning_rate):
     # optimizer = Optimizer.Adam(model.parameters(), lr=args.learning_rate)
 
-    parameters_names = []
-    parameters_names.append([
-        name_param_pair[0] for name_param_pair in model.named_parameters()
-    ])
-    optimizer = ScaledAdam(model.parameters(), lr=learning_rate,
-            betas=(0.9, 0.95),
-            clipping_scale=2.0,
-            parameters_names=parameters_names,
-            show_dominant_parameters=False,
-            clipping_update_period=1000,
-        )
-    optimizer.zero_grad()
+    if optimizer_type == 'ScaledAdam':
+        parameters_names = []
+        parameters_names.append([
+            name_param_pair[0] for name_param_pair in model.named_parameters()
+        ])
+        optimizer = ScaledAdam(model.parameters(), lr=learning_rate,
+                betas=(0.9, 0.95),
+                clipping_scale=2.0,
+                parameters_names=parameters_names,
+                show_dominant_parameters=False,
+                clipping_update_period=1000,
+            )
+        optimizer.zero_grad()
+
     return optimizer
+
+def get_scheduler(optimizer, scheduler_type, warmup_steps):
+    if scheduler_type == 'Eden':
+        scheduler = Eden(optimizer, 5000, 4, warmup_batches=warmup_steps)
+    return scheduler
+
+def get_scaler(scaler_type, dtype):
+    if scaler_type == 'GradScaler':
+        scaler = GradScaler(enabled=(dtype in ["fp16", "float16"]), init_scale=1.0)
+    return scaler
 
 def to_gpu(x):
     x = x.contiguous()
