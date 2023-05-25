@@ -1,7 +1,10 @@
-from torch.utils.tensorboard import SummaryWriter
-from vallex.utils import plot_spectrogram
-import matplotlib.pyplot as plt
 from pathlib import Path
+
+import matplotlib.pyplot as plt
+from torch.utils.tensorboard import SummaryWriter
+
+from vallex.utils import plot_spectrogram
+
 
 class TBLogger:
     def __init__(self, log_dir, name):

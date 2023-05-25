@@ -2,11 +2,10 @@
 # import sys
 # sys.path.append('utils')
 
-import utils.logger as logger
-from vallex.utils import (
-    read_audio_waveform, get_mel_specgram
-)
 from collections import OrderedDict
+
+import utils.logger as logger
+from vallex.utils import get_mel_specgram, read_audio_waveform
 
 if __name__ == "__main__":
 

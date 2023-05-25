@@ -1,16 +1,17 @@
 import argparse
+import collections
 import glob
 from pathlib import Path
-import collections
-import numpy as np
 
+import numpy as np
 import sox
+from symbol_table import SymbolTable
+from tokenizer import TextTokenizer, tokenize_text
 from tqdm import tqdm
+
 # import sys
 # sys.path.append('embeddings')
 
-from tokenizer import TextTokenizer, tokenize_text
-from symbol_table import SymbolTable
 
 def filter_speaker_list(lines, category_index, count):
     speakers = list(map(lambda line: line.strip().split('|')[category_index], lines))

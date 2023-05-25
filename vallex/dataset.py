@@ -7,9 +7,9 @@ from torch.nn.utils.rnn import pad_sequence
 from torch.utils.data import Dataset
 from tqdm import tqdm
 
-from vallex.utils import to_gpu
-from embeddings.tokenizer import TextTokenizer, tokenize_text
 from embeddings.collation import get_text_token_collater
+from embeddings.tokenizer import TextTokenizer, tokenize_text
+from vallex.utils import to_gpu
 
 
 def load_filepaths_and_text(metadata_csv, split="|"):
